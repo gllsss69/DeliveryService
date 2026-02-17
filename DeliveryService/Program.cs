@@ -16,13 +16,14 @@ namespace DeliveryServiceCore
     {
         private List<Courier> _couriers = new();
         private List<Order> _orders = new();
+        private List<Order> _orderQueue = new(); // FIFO queue implemented as list for searching/removal
         private int _cCounter = 1;
         private int _oCounter = 1;
 
         public void AddCourier(int x, int y, TransportType transport) =>
             _couriers.Add(new Courier { Id = _cCounter++, Location = new Point(x, y), Transport = transport });
 
-        // Реалізація логіки пошуку найближчого кур'єра з урахуванням ваги
+        // Реалізація логіки пошуку найближчого кур'єра з урахуванням ваги та пріоритетів
         public string CreateOrder(int x, int y, int weightKg)
         {
             var order = new Order { Id = _oCounter++, Location = new Point(x, y), WeightKg = weightKg };
@@ -31,20 +32,60 @@ namespace DeliveryServiceCore
             // 1. Знаходимо всіх вільних кур'єрів, які можуть перевозити цю вагу
             var suitableCouriers = _couriers.Where(c => c.IsAvailable && c.CanCarry(weightKg)).ToList();
 
-            // 2. Якщо підходящих немає — повертаємо відповідний статус
-            if (!suitableCouriers.Any()) return "Немає кур'єрів";
+            // 2. Якщо підходящих немає — кладемо в чергу
+            if (!suitableCouriers.Any())
+            {
+                _orderQueue.Add(order);
+                return $"Додано в чергу. Позиція в черзі: {_orderQueue.Count}.";
+            }
 
-            // 3. Обчислюємо відстань та знаходимо найближчого (Евклідова відстань)
-            var nearestCourier = suitableCouriers
-                .OrderBy(c => Math.Sqrt(Math.Pow(x - c.Location.X, 2) + Math.Pow(y - c.Location.Y, 2)))
-                .First();
+            // 3. Обчислюємо відстані
+            var courierDistances = suitableCouriers
+                .Select(c => new { Courier = c, Distance = Distance(c.Location, order.Location) })
+                .ToList();
 
-            // 4. Змінюємо статус кур'єра на Busy та призначаємо замовлення
-            nearestCourier.IsAvailable = false;
+            // мінімальна відстань
+            var minDistance = courierDistances.Min(cd => cd.Distance);
+
+            // Кандидати — ті, що в межах 1 одиниці від мінімальної відстані
+            var candidates = courierDistances.Where(cd => cd.Distance <= minDistance + 1.0).ToList();
+
+            // Якщо більше одного кандидата — пріоритет тому, хто виконав менше замовлень сьогодні
+            var chosen = candidates
+                .OrderBy(cd => cd.Courier.CompletedOrdersToday) // priority by completed today if within 1 unit
+                .ThenBy(cd => cd.Distance) // tiebreaker: closer distance
+                .First()
+                .Courier;
+
+            // 4. Призначаємо
+            AssignOrderToCourier(order, chosen);
+
+            return $"Успіх! Замовлення #{order.Id} (Ресторан: {x},{y}, {weightKg}kg) призначено кур'єру #{chosen.Id}.";
+        }
+
+        // Helper to compute Euclidean distance
+        private static double Distance(Point a, Point b) =>
+            Math.Sqrt(Math.Pow(a.X - b.X, 2) + Math.Pow(a.Y - b.Y, 2));
+
+        // Assign order to courier (used for both new orders and when dequeuing)
+        private void AssignOrderToCourier(Order order, Courier courier)
+        {
+            courier.IsAvailable = false;
             order.Status = OrderStatus.Assigned;
-            order.AssignedCourier = nearestCourier;
+            order.AssignedCourier = courier;
+            // If the order was in queue, remove it
+            _orderQueue.RemoveAll(o => o.Id == order.Id);
+        }
 
-            return $"Успіх! Замовлення #{order.Id} (Ресторан: {x},{y}, {weightKg}kg) призначено кур'єру #{nearestCourier.Id}.";
+        // Attempt to assign the first queued order that this courier can carry
+        private bool TryAssignFirstQueuedForCourier(Courier courier)
+        {
+            var idx = _orderQueue.FindIndex(o => courier.CanCarry(o.WeightKg));
+            if (idx < 0) return false;
+
+            var order = _orderQueue[idx];
+            AssignOrderToCourier(order, courier);
+            return true;
         }
 
         public List<Courier> GetAllCouriers() => _couriers.ToList();
@@ -61,16 +102,33 @@ namespace DeliveryServiceCore
             order.Status = OrderStatus.Delivered;
 
             // Звільняємо конкретного призначеного кур'єра
-            if (order.AssignedCourier != null)
+            var courier = order.AssignedCourier;
+            if (courier != null)
             {
-                order.AssignedCourier.IsAvailable = true;
-                // Якщо потрібно — можна також зняти посилання:
-                // order.AssignedCourier = null;
+                // mark delivered
+                courier.CompletedOrdersToday++;
+
+                // make courier available first
+                courier.IsAvailable = true;
+
+                // try to assign first queued order that courier can carry
+                // if successful, courier will become busy again
+                if (TryAssignFirstQueuedForCourier(courier))
+                {
+                    // assigned from queue; leave courier.IsAvailable = false inside AssignOrderToCourier
+                    // and update status/reference already done
+                }
+                else
+                {
+                    // remains available
+                }
             }
+
             return true;
         }
     }
 
+    // Rest of Program (menus) unchanged...
     class Program
     {
         static DeliveryService _service = new DeliveryService();
@@ -83,7 +141,19 @@ namespace DeliveryServiceCore
             while (!exit)
             {
                 Console.Clear();
-                Console.WriteLine("=== ГОЛОВНЕ МЕНЮ СИСТЕМИ ДОСТАВКИ ===");
+                Console.ForegroundColor = ConsoleColor.Cyan;
+                Console.WriteLine(@"
+  ____       _ _                      ____                  _          
+ |  _ \  ___| (_)_   _____ _ __ _   _/ ___|  ___ _ ____   _(_) ___ ___ 
+ | | | |/ _ \ | \ \ / / _ \ '__| | | \___ \ / _ \ '__\ \ / / |/ __/ _ \
+ | |_| |  __/ | |\ V /  __/ |  | |_| |___) |  __/ |   \ V /| | (_|  __/
+ |____/ \___|_|_| \_/ \___|_|   \__, |____/ \___|_|    \_/ |_|\___\___|
+                                |___/                         
+
+");
+                Console.ResetColor();
+                Console.WriteLine("----------------------------------------------------------------------------");
+                Console.WriteLine("\nВітаємо у системі доставки! Оберіть розділ для керування:");
                 Console.WriteLine("1. Керування кур'єрами");
                 Console.WriteLine("2. Керування замовленнями (MVP)");
                 Console.WriteLine("0. Вихід");
@@ -133,7 +203,7 @@ namespace DeliveryServiceCore
                         Console.Write("Введіть ID замовлення для завершення: ");
                         if (int.TryParse(Console.ReadLine(), out int id))
                         {
-                            if (_service.CompleteOrder(id)) Console.WriteLine("Статус змінено на Доставлено. Кур'єр вільний.");
+                            if (_service.CompleteOrder(id)) Console.WriteLine("Статус змінено на Доставлено. Кур'єр вільний або отримав нове завдання.");
                             else Console.WriteLine("Помилка: замовлення не знайдено або вже виконано.");
                         }
                         Pause();

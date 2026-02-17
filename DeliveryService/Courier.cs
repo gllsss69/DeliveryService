@@ -9,6 +9,9 @@
         public TransportType Transport { get; set; } = TransportType.Walker;
         public bool IsAvailable { get; set; } = true;
 
+        // Скільки замовлень кур'єр виконав сьогодні
+        public int CompletedOrdersToday { get; set; } = 0;
+
         // Перевіряє, чи може кур'єр перевезти вантаж із заданою вагою (кг)
         public bool CanCarry(int weightKg) => Transport switch
         {
@@ -19,6 +22,6 @@
         };
 
         public override string ToString() =>
-            $"[ID:{Id}] Кур'єр | Поз: ({Location.X},{Location.Y}) | Транспорт: {Transport} | Статус: {(IsAvailable ? "Вільний" : "Зайнятий")}";
+            $"[ID:{Id}] Кур'єр | Поз: ({Location.X},{Location.Y}) | Транспорт: {Transport} | Статус: {(IsAvailable ? "Вільний" : "Зайнятий")} | Виконано сьогодні: {CompletedOrdersToday}";
     }
 }
