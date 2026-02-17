@@ -4,26 +4,11 @@ using System.Linq;
 
 namespace DeliveryServiceCore
 {
-    
+    // Базові структури даних
     public record Point(int X, int Y);
     public enum OrderStatus { Created, Assigned, Delivered }
 
-    public class Courier
-    {
-        public int Id { get; set; }
-        public Point Location { get; set; }
-        public bool IsAvailable { get; set; } = true;
-        public override string ToString() => $"[ID:{Id}] Кур'єр | Поз: ({Location.X},{Location.Y}) | Вільний: {IsAvailable}";
-    }
-
-    public class Order
-    {
-        public int Id { get; set; }
-        public Point Location { get; set; }
-        public OrderStatus Status { get; set; } = OrderStatus.Created;
-        public override string ToString() => $"[ID:{Id}] Замовлення | Точка: ({Location.X},{Location.Y}) | Статус: {Status}";
-    }
-
+    // Ядро системи (Логіка MVP Етапу 1)
     public class DeliveryService
     {
         private List<Courier> _couriers = new();
@@ -31,19 +16,36 @@ namespace DeliveryServiceCore
         private int _cCounter = 1;
         private int _oCounter = 1;
 
-        public void AddCourier(int x, int y) => _couriers.Add(new Courier { Id = _cCounter++, Location = new Point(x, y) });
+        public void AddCourier(int x, int y) =>
+            _couriers.Add(new Courier { Id = _cCounter++, Location = new Point(x, y) });
 
-        public void CreateOrder(int x, int y)
+        // Реалізація логіки пошуку найближчого кур'єра
+        public string CreateOrder(int x, int y)
         {
             var order = new Order { Id = _oCounter++, Location = new Point(x, y) };
             _orders.Add(order);
-            // Авто-розподіл
-            var free = _couriers.FirstOrDefault(c => c.IsAvailable);
-            if (free != null) { free.IsAvailable = false; order.Status = OrderStatus.Assigned; }
+
+            // 1. Знаходимо всіх вільних кур'єрів
+            var freeCouriers = _couriers.Where(c => c.IsAvailable).ToList();
+
+            // 2. Якщо вільних немає — повертаємо відповідний статус
+            if (!freeCouriers.Any()) return "Немає кур'єрів";
+
+            // 3. Обчислюємо відстань та знаходимо найближчого (Евклідова відстань)
+            var nearestCourier = freeCouriers
+                .OrderBy(c => Math.Sqrt(Math.Pow(x - c.Location.X, 2) + Math.Pow(y - c.Location.Y, 2)))
+                .First();
+
+            // 4. Змінюємо статус кур'єра на Busy та призначаємо замовлення
+            nearestCourier.IsAvailable = false;
+            order.Status = OrderStatus.Assigned;
+
+            return $"Успіх! Замовлення #{order.Id} (Ресторан: {x},{y}) призначено кур'єру #{nearestCourier.Id}.";
         }
 
         public List<Courier> GetAllCouriers() => _couriers;
         public List<Order> GetAllOrders() => _orders;
+
         public bool RemoveOrder(int id) => _orders.RemoveAll(o => o.Id == id) > 0;
         public bool RemoveCourier(int id) => _couriers.RemoveAll(c => c.Id == id && c.IsAvailable) > 0;
 
@@ -51,16 +53,20 @@ namespace DeliveryServiceCore
         {
             var order = _orders.FirstOrDefault(o => o.Id == id && o.Status == OrderStatus.Assigned);
             if (order == null) return false;
+
             order.Status = OrderStatus.Delivered;
-            // Тут в ідеалі треба звільняти кур'єра, але для прикладу спростимо
+
+            // Звільняємо кур'єра (спрощений пошук для MVP)
+            var courier = _couriers.FirstOrDefault(c => !c.IsAvailable);
+            if (courier != null) courier.IsAvailable = true;
+
             return true;
         }
     }
 
-    // --- ВАШ КЛАС PROGRAM ТЕПЕР БАЧИТЬ DELIVERYSERVICE ---
     class Program
     {
-        static DeliveryService _service = new DeliveryService(); // Тепер рядок 8 працює!
+        static DeliveryService _service = new DeliveryService();
 
         static void Main()
         {
@@ -72,19 +78,15 @@ namespace DeliveryServiceCore
                 Console.Clear();
                 Console.WriteLine("=== ГОЛОВНЕ МЕНЮ СИСТЕМИ ДОСТАВКИ ===");
                 Console.WriteLine("1. Керування кур'єрами");
-                Console.WriteLine("2. Керування замовленнями");
+                Console.WriteLine("2. Керування замовленнями (MVP)");
                 Console.WriteLine("0. Вихід");
-                Console.Write("\nОберіть опцію: ");
+                Console.Write("\nОберіть розділ: ");
 
                 switch (Console.ReadLine())
                 {
                     case "1": CourierMenu(); break;
                     case "2": OrderMenu(); break;
                     case "0": exit = true; break;
-                    default:
-                        Console.WriteLine("Невірний вибір. Натисніть будь-яку клавішу...");
-                        Console.ReadKey();
-                        break;
                 }
             }
         }
@@ -96,43 +98,34 @@ namespace DeliveryServiceCore
             {
                 Console.Clear();
                 Console.WriteLine("--- МЕНЮ ЗАМОВЛЕНЬ ---");
-                Console.WriteLine("1. Створити замовлення");
+                Console.WriteLine("1. Нове замовлення");
                 Console.WriteLine("2. Список замовлень");
-                Console.WriteLine("3. Завершити замовлення");
-                Console.WriteLine("4. Видалити замовлення");
+                Console.WriteLine("3. Завершити доставку");
                 Console.WriteLine("0. Назад у головне меню");
-                Console.Write("\nОберіть опцію: ");
+                Console.Write("\nДія: ");
 
                 switch (Console.ReadLine())
                 {
                     case "1":
-                        Console.Write("Введіть точку доставки (X Y): ");
+                        Console.Write("Введіть координати ресторану (X Y): ");
                         var pos = ReadCoords();
-                        _service.CreateOrder(pos.x, pos.y);
-                        Console.WriteLine("Замовлення додано в систему.");
+                        string result = _service.CreateOrder(pos.x, pos.y);
+                        Console.WriteLine($"\n[РЕЗУЛЬТАТ]: {result}");
                         Pause();
                         break;
                     case "2":
                         Console.WriteLine("\nСПИСОК ЗАМОВЛЕНЬ:");
                         var orders = _service.GetAllOrders();
                         if (!orders.Any()) Console.WriteLine("Порожньо.");
-                        else orders.ForEach(Console.WriteLine);
+                        else orders.ForEach(o => Console.WriteLine(o));
                         Pause();
                         break;
                     case "3":
                         Console.Write("Введіть ID замовлення для завершення: ");
-                        if (int.TryParse(Console.ReadLine(), out int completeId))
+                        if (int.TryParse(Console.ReadLine(), out int id))
                         {
-                            if (_service.CompleteOrder(completeId)) Console.WriteLine("Статус змінено на Delivered.");
-                            else Console.WriteLine("Помилка: замовлення не знайдено.");
-                        }
-                        Pause();
-                        break;
-                    case "4":
-                        Console.Write("Введіть ID замовлення для видалення: ");
-                        if (int.TryParse(Console.ReadLine(), out int removeId))
-                        {
-                            if (_service.RemoveOrder(removeId)) Console.WriteLine("Замовлення видалено.");
+                            if (_service.CompleteOrder(id)) Console.WriteLine("Статус змінено на Доставлено. Кур'єр вільний.");
+                            else Console.WriteLine("Помилка: замовлення не знайдено або вже виконано.");
                         }
                         Pause();
                         break;
@@ -152,27 +145,31 @@ namespace DeliveryServiceCore
                 Console.WriteLine("2. Список кур'єрів");
                 Console.WriteLine("3. Видалити кур'єра");
                 Console.WriteLine("0. Назад у головне меню");
-                Console.Write("\nОберіть опцію: ");
+                Console.Write("\nДія: ");
 
                 switch (Console.ReadLine())
                 {
                     case "1":
-                        Console.Write("Початкова позиція (X Y): ");
+                        Console.Write("Введіть початкові координати (X Y): ");
                         var pos = ReadCoords();
                         _service.AddCourier(pos.x, pos.y);
+                        Console.WriteLine("Кур'єра додано.");
                         Pause();
                         break;
                     case "2":
+                        Console.WriteLine("\nСПИСОК КУР'ЄРІВ:");
                         var couriers = _service.GetAllCouriers();
                         if (!couriers.Any()) Console.WriteLine("Кур'єрів немає.");
-                        else couriers.ForEach(Console.WriteLine);
+                        else couriers.ForEach(c => Console.WriteLine(c));
                         Pause();
                         break;
                     case "3":
                         Console.Write("ID кур'єра для видалення: ");
-                        int.TryParse(Console.ReadLine(), out int id);
-                        if (_service.RemoveCourier(id)) Console.WriteLine("Кур'єр видалений.");
-                        else Console.WriteLine("Помилка видалення.");
+                        if (int.TryParse(Console.ReadLine(), out int id))
+                        {
+                            if (_service.RemoveCourier(id)) Console.WriteLine("Кур'єр видалений.");
+                            else Console.WriteLine("Помилка: кур'єр зайнятий або не існує.");
+                        }
                         Pause();
                         break;
                     case "0": back = true; break;
@@ -183,7 +180,7 @@ namespace DeliveryServiceCore
         static (int x, int y) ReadCoords()
         {
             string input = Console.ReadLine() ?? "0 0";
-            var parts = input.Split(' ');
+            var parts = input.Split(' ', StringSplitOptions.RemoveEmptyEntries);
             int x = parts.Length > 0 && int.TryParse(parts[0], out int resX) ? resX : 0;
             int y = parts.Length > 1 && int.TryParse(parts[1], out int resY) ? resY : 0;
             return (x, y);
@@ -191,7 +188,7 @@ namespace DeliveryServiceCore
 
         static void Pause()
         {
-            Console.WriteLine("\nНатисніть будь-яку клавішу...");
+            Console.WriteLine("\nНатисніть будь-яку клавішу для продовження...");
             Console.ReadKey();
         }
     }
