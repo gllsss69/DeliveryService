@@ -8,6 +8,9 @@ namespace DeliveryServiceCore
     public record Point(int X, int Y);
     public enum OrderStatus { Created, Assigned, Delivered }
 
+    // Типи транспорту та їх максимально допустима вага
+    public enum TransportType { Walker, Bicycle, Car }
+
     // Ядро системи (Логіка MVP Етапу 1)
     public class DeliveryService
     {
@@ -16,35 +19,36 @@ namespace DeliveryServiceCore
         private int _cCounter = 1;
         private int _oCounter = 1;
 
-        public void AddCourier(int x, int y) =>
-            _couriers.Add(new Courier { Id = _cCounter++, Location = new Point(x, y) });
+        public void AddCourier(int x, int y, TransportType transport) =>
+            _couriers.Add(new Courier { Id = _cCounter++, Location = new Point(x, y), Transport = transport });
 
-        // Реалізація логіки пошуку найближчого кур'єра
-        public string CreateOrder(int x, int y)
+        // Реалізація логіки пошуку найближчого кур'єра з урахуванням ваги
+        public string CreateOrder(int x, int y, int weightKg)
         {
-            var order = new Order { Id = _oCounter++, Location = new Point(x, y) };
+            var order = new Order { Id = _oCounter++, Location = new Point(x, y), WeightKg = weightKg };
             _orders.Add(order);
 
-            // 1. Знаходимо всіх вільних кур'єрів
-            var freeCouriers = _couriers.Where(c => c.IsAvailable).ToList();
+            // 1. Знаходимо всіх вільних кур'єрів, які можуть перевозити цю вагу
+            var suitableCouriers = _couriers.Where(c => c.IsAvailable && c.CanCarry(weightKg)).ToList();
 
-            // 2. Якщо вільних немає — повертаємо відповідний статус
-            if (!freeCouriers.Any()) return "Немає кур'єрів";
+            // 2. Якщо підходящих немає — повертаємо відповідний статус
+            if (!suitableCouriers.Any()) return "Немає кур'єрів";
 
             // 3. Обчислюємо відстань та знаходимо найближчого (Евклідова відстань)
-            var nearestCourier = freeCouriers
+            var nearestCourier = suitableCouriers
                 .OrderBy(c => Math.Sqrt(Math.Pow(x - c.Location.X, 2) + Math.Pow(y - c.Location.Y, 2)))
                 .First();
 
             // 4. Змінюємо статус кур'єра на Busy та призначаємо замовлення
             nearestCourier.IsAvailable = false;
             order.Status = OrderStatus.Assigned;
+            order.AssignedCourier = nearestCourier;
 
-            return $"Успіх! Замовлення #{order.Id} (Ресторан: {x},{y}) призначено кур'єру #{nearestCourier.Id}.";
+            return $"Успіх! Замовлення #{order.Id} (Ресторан: {x},{y}, {weightKg}kg) призначено кур'єру #{nearestCourier.Id}.";
         }
 
-        public List<Courier> GetAllCouriers() => _couriers;
-        public List<Order> GetAllOrders() => _orders;
+        public List<Courier> GetAllCouriers() => _couriers.ToList();
+        public List<Order> GetAllOrders() => _orders.ToList();
 
         public bool RemoveOrder(int id) => _orders.RemoveAll(o => o.Id == id) > 0;
         public bool RemoveCourier(int id) => _couriers.RemoveAll(c => c.Id == id && c.IsAvailable) > 0;
@@ -56,10 +60,13 @@ namespace DeliveryServiceCore
 
             order.Status = OrderStatus.Delivered;
 
-            // Звільняємо кур'єра (спрощений пошук для MVP)
-            var courier = _couriers.FirstOrDefault(c => !c.IsAvailable);
-            if (courier != null) courier.IsAvailable = true;
-
+            // Звільняємо конкретного призначеного кур'єра
+            if (order.AssignedCourier != null)
+            {
+                order.AssignedCourier.IsAvailable = true;
+                // Якщо потрібно — можна також зняти посилання:
+                // order.AssignedCourier = null;
+            }
             return true;
         }
     }
@@ -109,7 +116,9 @@ namespace DeliveryServiceCore
                     case "1":
                         Console.Write("Введіть координати ресторану (X Y): ");
                         var pos = ReadCoords();
-                        string result = _service.CreateOrder(pos.x, pos.y);
+                        Console.Write("Введіть вагу замовлення (kg): ");
+                        int.TryParse(Console.ReadLine(), out int weight);
+                        string result = _service.CreateOrder(pos.x, pos.y, weight);
                         Console.WriteLine($"\n[РЕЗУЛЬТАТ]: {result}");
                         Pause();
                         break;
@@ -152,7 +161,15 @@ namespace DeliveryServiceCore
                     case "1":
                         Console.Write("Введіть початкові координати (X Y): ");
                         var pos = ReadCoords();
-                        _service.AddCourier(pos.x, pos.y);
+
+                        Console.WriteLine("Оберіть тип транспорту: 1) Walker (до 5kg)  2) Bicycle (до 15kg)  3) Car (до 50kg)");
+                        Console.Write("Введіть номер типу: ");
+                        TransportType transport = TransportType.Walker;
+                        var tInput = Console.ReadLine();
+                        if (tInput == "2") transport = TransportType.Bicycle;
+                        else if (tInput == "3") transport = TransportType.Car;
+
+                        _service.AddCourier(pos.x, pos.y, transport);
                         Console.WriteLine("Кур'єра додано.");
                         Pause();
                         break;
